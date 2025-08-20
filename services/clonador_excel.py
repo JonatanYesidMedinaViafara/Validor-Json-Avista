@@ -3,91 +3,83 @@ import pandas as pd
 from pathlib import Path
 import logging
 from datetime import datetime
+import config
+
+# si vas a usar SFTP:
+try:
+    from utils.sftp_client import SFTPReader
+except Exception:
+    SFTPReader = None
 
 class ClonadorExcel:
-    def __init__(self, carpeta_json: str, carpeta_salida: str):
-        self.carpeta_json = Path(carpeta_json)
+    def __init__(self, carpeta_json_local: str, carpeta_salida: str, modo_ingesta: int = None):
+        self.carpeta_json = Path(carpeta_json_local)
         self.carpeta_salida = Path(carpeta_salida)
+        self.modo_ingesta = modo_ingesta or config.MODO_INGESTA_DEFAULT
         self.logger = logging.getLogger("ClonadorExcel")
 
-    def _cargar_json(self, ruta_archivo_json: Path):
-        """Carga el JSON y devuelve (lista_documentos, fecha_procesado|None). Soporta ambos formatos."""
+    # ---- Entrada LOCAL ----
+    def _iter_local(self):
+        for p in self.carpeta_json.glob("*.json"):
+            yield p.name, p.read_bytes()
+
+    # ---- Entrada SFTP (streaming) ----
+    def _iter_sftp(self):
+        if SFTPReader is None:
+            raise RuntimeError("Paramiko/SFTP no disponible. Instala 'paramiko'.")
+        with SFTPReader(config.SFTP_HOST, config.SFTP_PORT, config.SFTP_USER, config.SFTP_PASS) as s:
+            for fname, data in s.iter_json_files(config.SFTP_DIR_JSONS):
+                yield fname, data
+
+    def _procesar_json_anidado(self, nombre_archivo: str, raw_bytes: bytes):
         try:
-            with open(ruta_archivo_json, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            self.logger.warning(f"No se pudo leer '{ruta_archivo_json}'. Error: {e}")
-            return None, None
-
-        # Formato nuevo: dict con 'documentos'
-        if isinstance(data, dict) and "documentos" in data and isinstance(data["documentos"], list):
-            lista = data["documentos"]
-            fecha_proc = data.get("fecha_procesado")
-            return lista, fecha_proc
-
-        # Formato anterior: lista en la raíz
-        if isinstance(data, list):
-            return data, None
-
-        self.logger.warning(f"Formato JSON no reconocido en '{ruta_archivo_json}'. Se omite.")
-        return None, None
-
-    def _procesar_json_anidado(self, ruta_archivo_json: Path):
-        """
-        De un archivo JSON (en cualquiera de los 2 formatos), extrae una sola fila consolidada:
-        - id_cargue_origen (primer documento)
-        - nombre_archivo_origen (nombre del .json)
-        - fecha_procesado_origen (si viene en formato nuevo)
-        - todas las claves de data_extraida prefijadas por tipo_documento_
-        """
-        lista_de_documentos, fecha_procesado = self._cargar_json(ruta_archivo_json)
-        if not lista_de_documentos:
+            text = raw_bytes.decode("utf-8")
+            obj = json.loads(text)
+        except Exception as e:
+            self.logger.warning(f"No se pudo leer '{nombre_archivo}'. Error: {e}")
             return None
 
-        fila_consolidada = {
-            "nombre_archivo_origen": ruta_archivo_json.name
-        }
+        # Soporta ambos formatos:
+        # 1) lista de documentos
+        # 2) {"fecha_procesado": "...", "documentos":[...]}
+        documentos = None
+        if isinstance(obj, list):
+            documentos = obj
+        elif isinstance(obj, dict) and isinstance(obj.get("documentos"), list):
+            documentos = obj["documentos"]
 
-        # Si hay fecha_procesado (formato nuevo), guardarla
-        if fecha_procesado:
-            fila_consolidada["fecha_procesado_origen"] = fecha_procesado
+        if not documentos:
+            self.logger.warning(f"'{nombre_archivo}' no contiene datos válidos.")
+            return None
 
-        # Tomar id_cargue del primer documento válido que lo tenga
-        id_cargue = None
-        for doc in lista_de_documentos:
-            if isinstance(doc, dict):
-                id_cargue = doc.get("id_cargue")
-                if id_cargue:
-                    break
-        fila_consolidada["id_cargue_origen"] = id_cargue if id_cargue else "No encontrado"
+        fila = {}
+        primero = documentos[0]
+        fila['id_cargue_origen'] = primero.get('id_cargue', 'No encontrado')
+        fila['nombre_archivo_origen'] = nombre_archivo
 
-        # Volcar data_extraida de cada documento con prefijo del tipo_documento
-        for documento in lista_de_documentos:
+        for documento in documentos:
             if not isinstance(documento, dict):
                 continue
-            tipo_doc = documento.get('tipo_documento', 'sin_tipo')
-            datos_anidados = documento.get('data_extraida', {}) or {}
-            if isinstance(datos_anidados, dict):
-                for clave, valor in datos_anidados.items():
-                    nueva_clave = f"{tipo_doc}_{clave}"
-                    fila_consolidada[nueva_clave] = valor
-
-        return fila_consolidada
+            tipo = documento.get('tipo_documento', 'sin_tipo')
+            datos = documento.get('data_extraida', {}) or {}
+            if isinstance(datos, dict):
+                for k, v in datos.items():
+                    fila[f"{tipo}_{k}"] = v
+        return fila
 
     def generar_excel(self):
-        if not self.carpeta_json.exists():
-            self.logger.error(f"La carpeta '{self.carpeta_json}' no existe.")
-            return False
-
-        archivos_json = [f for f in self.carpeta_json.glob("*.json")]
-        if not archivos_json:
-            self.logger.warning(f"No se encontraron JSON en '{self.carpeta_json}'.")
-            return False
+        # Selección de fuente
+        if self.modo_ingesta == 2:
+            iterador = self._iter_sftp()
+            self.logger.info("Leyendo JSON desde SFTP (streaming)...")
+        else:
+            iterador = self._iter_local()
+            self.logger.info("Leyendo JSON desde carpeta local...")
 
         filas = []
-        for archivo in archivos_json:
-            self.logger.info(f"Procesando {archivo.name}...")
-            fila = self._procesar_json_anidado(archivo)
+        for nombre, raw in iterador:
+            self.logger.info(f"Procesando {nombre}...")
+            fila = self._procesar_json_anidado(nombre, raw)
             if fila:
                 filas.append(fila)
 
@@ -96,21 +88,15 @@ class ClonadorExcel:
             return False
 
         df = pd.DataFrame(filas)
+        cols_ref = ['id_cargue_origen', 'nombre_archivo_origen']
+        otras = [c for c in df.columns if c not in cols_ref]
+        df = df[cols_ref + sorted(otras)]
 
-        # Orden: columnas de referencia primero
-        columnas_ref = ['id_cargue_origen', 'nombre_archivo_origen']
-        if 'fecha_procesado_origen' in df.columns:
-            columnas_ref.insert(1, 'fecha_procesado_origen')  # si existe, va después de id_cargue
-
-        otras = [c for c in df.columns if c not in columnas_ref]
-        df = df[columnas_ref + sorted(otras)]
-
-        # Nombre dinámico con fecha y hora
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         nombre_archivo = f"clon_json_{timestamp}.xlsx"
-        ruta_salida = self.carpeta_salida / nombre_archivo
+        ruta_salida = Path(config.CARPETA_EXCEL_CLON) / nombre_archivo
 
-        self.carpeta_salida.mkdir(parents=True, exist_ok=True)
+        Path(config.CARPETA_EXCEL_CLON).mkdir(parents=True, exist_ok=True)
         df.to_excel(ruta_salida, index=False, engine='openpyxl')
 
         self.logger.info(f"Excel generado: {ruta_salida} ({len(df)} filas, {len(df.columns)} columnas)")
