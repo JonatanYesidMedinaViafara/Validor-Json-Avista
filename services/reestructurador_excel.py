@@ -1,55 +1,17 @@
+# services/reestructurador_excel.py
 import pandas as pd
 from pathlib import Path
 import logging
-
-def _clean_spaces_up(s):
-    if not isinstance(s, str):
-        return ""
-    return " ".join(s.strip().upper().split())
-
-def separar_nombre_datacredito(nombre_completo: str):
-    if not isinstance(nombre_completo, str) or not nombre_completo.strip():
-        return ""
-    partes = nombre_completo.strip().split()
-    if len(partes) == 1:
-        return partes[0].upper()
-    if len(partes) == 2:
-        return f"{partes[1].upper()} {partes[0].upper()}"
-    if len(partes) == 3:
-        return f"{partes[2].upper()} {partes[0].upper()} {partes[1].upper()}"
-    primer_ap = partes[0].upper()
-    segundo_ap = partes[1].upper()
-    nombres = " ".join(p.upper() for p in partes[2:])
-    return f"{nombres} {primer_ap} {segundo_ap}".strip()
-
-def _strip_desprendible_prefijo(nombre: str):
-    """
-    Quita prefijos de 1-3 letras al inicio (p.ej. 'ag ', 'ij ', 'pt ') que no pertenecen al nombre.
-    Solo si el primer token es 100% letras y longitud <=3.
-    """
-    if not isinstance(nombre, str):
-        return ""
-    s = nombre.strip()
-    if not s:
-        return ""
-    # normaliza espacios y mayúsculas al final
-    tokens = s.split()
-    if tokens and tokens[0].isalpha() and len(tokens[0]) <= 3:
-        tokens = tokens[1:]  # quita prefijo
-    return _clean_spaces_up(" ".join(tokens))
 
 def convertir_a_entero_sin_notacion(valor):
     try:
         if isinstance(valor, float) and valor.is_integer():
             return str(int(valor))
-        s = str(valor)
-        if s.isdigit():
-            return s
-        if "e" in s.lower():
-            return str(int(float(s)))
+        if isinstance(valor, (int, str)) and str(valor).isdigit():
+            return str(valor)
     except:
         pass
-    return valor
+    return str(valor) if valor is not None else ""
 
 class ReestructuradorExcel:
     def __init__(self, carpeta_excel_origen: str, carpeta_excel_destino: str):
@@ -64,94 +26,138 @@ class ReestructuradorExcel:
             return None
         return max(archivos, key=lambda f: f.stat().st_mtime)
 
+    def _upper_text_columns(self, df: pd.DataFrame, exclude=None) -> pd.DataFrame:
+        exclude = set(exclude or [])
+        out = df.copy()
+        for col in out.columns:
+            if col in exclude:
+                continue
+            if out[col].dtype == "object":
+                out[col] = out[col].fillna("").apply(lambda x: x.upper() if isinstance(x, str) else x)
+        return out
+
+    def _normalizar_fechas_texto(self, df: pd.DataFrame) -> pd.DataFrame:
+        meses = {'ENE':'01','FEB':'02','MAR':'03','ABR':'04','MAY':'05','JUN':'06',
+                 'JUL':'07','AGO':'08','SEP':'09','OCT':'10','NOV':'11','DIC':'12'}
+        def _norm(x):
+            if not isinstance(x, str): return x
+            up = x.upper().replace("-", "/")
+            for k,v in meses.items():
+                up = up.replace(f"/{k}/", f"/{v}/")
+            return up
+        for col in ["cedula_fecha_nacimiento","desprendible_nomina_vigencia"]:
+            if col in df.columns:
+                df[col] = df[col].apply(_norm)
+        return df
+
+    def _crear_nombres_completos(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Crea columnas 'X Nombre Completo' y 'X Firma Electrónica Nombre Completo' a partir
+        de *_nombre_completo y *_nombre_firma_electronica. Elimina las columnas fuente.
+        """
+        df = df.copy()
+        mapeo = {
+            "Cedula Nombre Completo": ["cedula_nombre_completo"],
+            "Libranza Nombre Completo": ["libranza_nombre_completo"],
+            "Amortizacion Nombre Completo": ["amortizacion_nombre_completo"],
+            "Solicitud Credito Nombre Completo": ["solicitud_credito_nombre_completo"],
+            "Solicitud Fianza Nombre Completo": ["solicitud_fianza_nombre_completo"],
+            "Seguro De Vida Nombre Completo": ["seguro_de_vida_nombre_completo"],
+            "Datacredito Nombre Completo": ["datacredito_nombre_deudor"],
+            "Formato Conocimiento Nombre Completo": ["formato_conocimiento_nombre_completo"],
+            "Desprendible Nomina Nombre Completo": ["desprendible_nomina_nombre_completo"],
+
+            "Libranza Firma Electrónica Nombre Completo": ["libranza_nombre_firma_electronica"],
+            "Amortizacion Firma Electrónica Nombre Completo": ["amortizacion_nombre_firma_electronica"],
+            "Solicitud Credito Firma Electrónica Nombre Completo": ["solicitud_credito_nombre_firma_electronica"],
+            "Solicitud Fianza Firma Electrónica Nombre Completo": ["solicitud_fianza_nombre_firma_electronica"],
+            "Formato Conocimiento Firma Electrónica Nombre Completo": ["formato_conocimiento_nombre_firma_electronica"],
+            "Seguro De Vida Firma Electrónica Nombre Completo": ["seguro_de_vida_nombre_firma_electronica"],
+        }
+
+        # crear destino y recordar columnas fuente para borrarlas
+        a_borrar = []
+        for destino, fuentes in mapeo.items():
+            for f in fuentes:
+                if f in df.columns:
+                    df[destino] = df[f]
+                    a_borrar.append(f)
+
+        # Limpieza prefijos de 2 letras + espacio en Desprendible
+        col_dn = "Desprendible Nomina Nombre Completo"
+        if col_dn in df.columns:
+            df[col_dn] = df[col_dn].astype(str).str.replace(r'^[A-Z]{2}\s+', '', regex=True)
+
+        # borrar fuentes
+        if a_borrar:
+            df.drop(columns=[c for c in a_borrar if c in df.columns], inplace=True, errors="ignore")
+
+        return df
+
     def reestructurar(self):
         archivo = self._obtener_ultimo_excel()
         if not archivo:
             return False
-        self.logger.info(f"Reestructurando archivo: {archivo.name}")
 
+        self.logger.info(f"Reestructurando archivo: {archivo.name}")
         df = pd.read_excel(archivo, dtype=str)
+
         if 'nombre_archivo_origen' not in df.columns:
             self.logger.error("La columna 'nombre_archivo_origen' no existe en el Excel.")
             return False
+        # 1) Asegurar NN / Numero credito / Cedula
+        necesarias = {"NN", "Numero credito", "Cedula"}
+        if not necesarias.issubset(df.columns):
+            # Solo si faltan, intentamos derivarlas de algún nombre_archivo de los documentos (si existiera)
+            # En la clonación nueva ya no será necesario, pero dejamos este fallback.
+            posibles_cols = [c for c in df.columns if c.endswith("_nombre_archivo")]
+            nom = df[posibles_cols[0]].astype(str) if posibles_cols else None
+            if nom is not None:
+                base = nom.str.replace(r"\.pdf$", "", regex=True).str.split("_", expand=True)
+                if base.shape[1] >= 4:
+                    df.insert(0, "NN", base[0])
+                    df.insert(1, "Numero credito", base[2])
+                    df.insert(2, "Cedula", base[3])
+        else:
+            # Ya existen: garantizamos que son cadenas legibles
+            for c in ["NN", "Numero credito", "Cedula"]:
+                df[c] = df[c].astype(str)
 
-        # NN / Número crédito / Cédula desde el nombre del .json
-        nuevo_df = df['nombre_archivo_origen'].str.replace('.json', '', regex=False).str.split('_', expand=True)
-        nuevo_df.columns = ['NN', 'Numero credito', 'Cedula']
-        for i, col in enumerate(['NN', 'Numero credito', 'Cedula']):
-            df.insert(i, col, nuevo_df[col])
-        df.drop(columns=['nombre_archivo_origen'], inplace=True)
+        # 2) Fechas a texto normalizado (no tipar)
+        df = self._normalizar_fechas_texto(df)
 
-        # *_nombre_completo  -> "<Prefijo> Nombre Completo"
-        cols_nc = [c for c in df.columns if c.endswith("_nombre_completo")]
-        for col in cols_nc:
-            prefijo = col.replace("_nombre_completo", "").replace("_", " ").title()
-            nuevo = f"{prefijo} Nombre Completo"
-            df[nuevo] = df[col].apply(_clean_spaces_up)
-            df.drop(columns=[col], inplace=True)
+        # 3) Todo texto a MAYÚSCULA (excepto fechas ya normalizadas)
+        df = self._upper_text_columns(df, exclude={"cedula_fecha_nacimiento","desprendible_nomina_vigencia"})
 
-        # Datacrédito (apellidos primero -> nombre completo estándar)
-        if "datacredito_nombre_deudor" in df.columns:
-            df["Datacredito Nombre Completo"] = df["datacredito_nombre_deudor"].apply(separar_nombre_datacredito).apply(_clean_spaces_up)
-            df.drop(columns=["datacredito_nombre_deudor"], inplace=True)
+        # 4) Crear columnas 'Nombre Completo' (y firmantes) y eliminar las de origen
+        df = self._crear_nombres_completos(df)
 
-        # *_nombre_firma_electronica -> "<Prefijo> Firma Electrónica Nombre Completo"
-        cols_firma = [c for c in df.columns if c.endswith("_nombre_firma_electronica")]
-        for col in cols_firma:
-            prefijo = col.replace("_nombre_firma_electronica", "").replace("_", " ").title()
-            nuevo = f"{prefijo} Firma Electrónica Nombre Completo"
-            df[nuevo] = df[col].apply(_clean_spaces_up)
-            df.drop(columns=[col], inplace=True)
-
-        # Limpieza especial: Desprendible Nomina Nombre Completo (quitar prefijo de 1-3 letras)
-        col_despr = "Desprendible Nomina Nombre Completo"
-        if col_despr in df.columns:
-            df[col_despr] = df[col_despr].apply(_strip_desprendible_prefijo)
-
-        # *_numero_documento -> "<Prefijo> Cedula"
-        cols_doc = [c for c in df.columns if c.endswith("_numero_documento")]
-        for col in cols_doc:
-            prefijo = col.replace("_numero_documento", "").replace("_", " ").title()
-            df.rename(columns={col: f"{prefijo} Cedula"}, inplace=True)
-
-        # Fechas: "-" -> "/" y meses texto -> número
-        meses = {'ENE':'01','FEB':'02','MAR':'03','ABR':'04','MAY':'05','JUN':'06',
-                 'JUL':'07','AGO':'08','SEP':'09','OCT':'10','NOV':'11','DIC':'12'}
-        def normalizar_fecha(s):
-            if not isinstance(s, str): return s
-            s = s.strip().upper().replace("-", "/")
-            for k,v in meses.items():
-                s = s.replace(f"/{k}/", f"/{v}/")
-            return s
-
-        fecha_cols = ["cedula_fecha_nacimiento", "desprendible_nomina_vigencia"]
-        for col in fecha_cols:
-            if col in df.columns:
-                df[col] = df[col].apply(normalizar_fecha)
-
-        # Mantener NN / Numero credito / Cedula como texto legible
-        for col in ["NN", "Numero credito", "Cedula"]:
+        # 5) Preservar llaves como texto legible
+        for col in ["NN","Numero credito","Cedula"]:
             if col in df.columns:
                 df[col] = df[col].apply(convertir_a_entero_sin_notacion)
 
-        # Convertir a numérico lo demás cuando aplique
-        excluir = set(fecha_cols) | {"NN","Numero credito","Cedula"}
+        # 6) Tipar números donde aplique (sin tocar fechas ni llaves)
+        columnas_excluir = {"cedula_fecha_nacimiento","desprendible_nomina_vigencia","NN","Numero credito","Cedula"}
         for col in df.columns:
-            if col not in excluir:
-                try:
-                    df[col] = pd.to_numeric(df[col])
-                except:
-                    pass
+            if col in columnas_excluir: 
+                continue
+            try:
+                df[col] = pd.to_numeric(df[col])
+            except:
+                pass
 
-        # Reordenar
+        # 7) Reordenar
         columnas = list(df.columns)
-        base = ['NN', 'Numero credito', 'Cedula']
+        nuevas = ['NN','Numero credito','Cedula']
         if 'id_cargue_origen' in columnas:
-            base.append('id_cargue_origen')
-        otras = [c for c in columnas if c not in base]
-        df = df[base + otras]
+            nuevas.append('id_cargue_origen')
+        for c in columnas:
+            if c not in nuevas:
+                nuevas.append(c)
+        df = df[nuevas]
 
-        # Guardar
+        # 8) Guardar
         self.carpeta_excel_destino.mkdir(parents=True, exist_ok=True)
         nuevo_nombre = archivo.name.replace(".xlsx", "_reestructurado.xlsx")
         ruta_nueva = self.carpeta_excel_destino / nuevo_nombre

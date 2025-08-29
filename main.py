@@ -1,11 +1,15 @@
-# main.py (solo el inicio relevante)
+# main.py
 import logging
 from utils.logger import get_logger
 import config
-from services.Depurador import Depurador
+
+# IMPORTS de servicios
+from services.depurar import Depurador                     # <- el archivo es depurar.py
 from services.clonador_excel import ClonadorExcel
 from services.reestructurador_excel import ReestructuradorExcel
 from services.comparador_avista import ComparadorAvista
+from services.normalizador_excel import NormalizadorExcel
+from services.consolidador_final import ConsolidadorFinal
 
 if __name__ == "__main__":
     logger = get_logger()
@@ -18,37 +22,60 @@ if __name__ == "__main__":
     except Exception:
         modo = config.MODO_INGESTA_DEFAULT
 
-    # 2) Depuración solo si es local
+    # 2) Depuración (solo local): mueve lo que NO es .json a RUTA_NO_JSON
     if modo == 1:
         dep = Depurador(config.RUTA_JSONS, config.RUTA_NO_JSON)
         dep.ejecutar()
 
-    # 3) Clon (lee de local o SFTP)
-    clon = ClonadorExcel(config.RUTA_JSONS, str(config.CARPETA_EXCEL_CLON), modo_ingesta=modo)
+    # 3) Clonación (lee local o SFTP) → guarda en Resultados Davinci
+    clon = ClonadorExcel(
+        carpeta_json_local=config.RUTA_JSONS,
+        carpeta_salida=str(config.CARPETA_EXCEL_CLON),
+        modo_ingesta=modo
+    )
     if clon.generar_excel():
         logger.info("Clonación completada correctamente.")
     else:
         logger.error("Fallo en clonación.")
         raise SystemExit(1)
 
-    # 4) Reestructurar
-    reestr = ReestructuradorExcel(str(config.CARPETA_EXCEL_CLON), str(config.CARPETA_EXCEL_REESTRUCTURADO))
+    # 4) Reestructurado → guarda en Resultados Davinci
+    reestr = ReestructuradorExcel(
+        carpeta_excel_origen=str(config.CARPETA_EXCEL_CLON),
+        carpeta_excel_destino=str(config.CARPETA_EXCEL_REESTRUCTURADO),
+    )
     if not reestr.reestructurar():
         logger.error("Fallo reestructurando.")
         raise SystemExit(1)
 
     logger.info("Continuando con el proceso de validación...")
 
-    # 5) Comparación AVISTA (base dinámica: toma el último .xlsx de la carpeta)
+    # 5) Comparación AVISTA (toma SIEMPRE el último Excel de Avista)
     comp = ComparadorAvista(
         carpeta_excel_reestructurado=str(config.CARPETA_EXCEL_REESTRUCTURADO),
         carpeta_bases_avista=str(config.CARPETA_BASES_AVISTA),
         carpeta_salida=str(config.CARPETA_SALIDA_COMPARACION),
     )
-    comp.comparar()
-    # # Paso 6: Normalizador Excel
-    # normalizador = NormalizadorExcel(config.CARPETA_EXCEL_REESTRUCTURADO, config.CARPETA_EXCEL_NORMALIZADO, config.CARPETA_EXCEL_FALLOS)
-    # if normalizador.normalizar():
-    #     logger.info("Normalización completada correctamente. Archivos generados.")
-    # else:
-    #     logger.warning("No se pudo normalizar el Excel.")
+    comp.comparar()   # genera SOLO '..._evidencia_avista_unica.xlsx' en Resultados Davinci
+
+    # 6) Normalización (un único archivo con columna 'Estado Normalizado')
+    normalizador = NormalizadorExcel(
+        carpeta_excel_reestructurado=str(config.CARPETA_EXCEL_REESTRUCTURADO),
+        carpeta_salida=str(config.CARPETA_EXCEL_NORMALIZADO),
+        umbral_similitud=float(config.TOLERANCIA_TEXTO),
+    )
+    normalizador.normalizar()
+
+    # 7) Unificado final (un solo Excel con hojas: Clonación Json, Reestructurado, Resultado Normalizado, Avista Evidencia)
+    consol = ConsolidadorFinal(
+        carpeta_clon=str(config.CARPETA_EXCEL_CLON),
+        carpeta_reestructurado=str(config.CARPETA_EXCEL_REESTRUCTURADO),
+        carpeta_normalizado=str(config.CARPETA_EXCEL_NORMALIZADO),
+        carpeta_comparacion=str(config.CARPETA_SALIDA_COMPARACION),
+        carpeta_salida_unificado=str(config.CARPETA_EXCEL_UNIFICADO),
+    )
+    salida = consol.consolidar()
+    if salida:
+        logger.info(f"Archivo unificado final creado: {salida}")
+    else:
+        logger.warning("No se pudo crear el archivo unificado final.")

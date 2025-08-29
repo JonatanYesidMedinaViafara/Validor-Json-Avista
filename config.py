@@ -9,24 +9,29 @@ MODO_INGESTA_DEFAULT = 1
 RUTA_JSONS = r"C:\Users\jymv1575\Desktop\Archivos Json a Validar"
 RUTA_NO_JSON = r"C:\Users\jymv1575\Desktop\Archivos no Json"
 
-# SFTP (no guardes credenciales reales en repos públicos)
+# SFTP (usa almacenamiento seguro para credenciales en producción)
 SFTP_HOST = "securefile.coomeva.com.co"
 SFTP_PORT = 2224
 SFTP_USER = "davinci"
 SFTP_PASS = "LoIlmC4H31FBAJG"
 SFTP_DIR_JSONS = "davinci/procesados-qa"   # carpeta remota donde están los .json
 
-# --- Carpeta de salidas locales ---
-CARPETA_EXCEL_CLON = Path(r"C:\Users\jymv1575\Desktop\Excel Inicial")
-CARPETA_EXCEL_REESTRUCTURADO = Path(r"C:\Users\jymv1575\Desktop\Excel Reestructurado")
-CARPETA_EXCEL_NORMALIZADO = Path(r"C:\Users\jymv1575\Desktop\Excel Normalizado")
-CARPETA_EXCEL_FALLOS = Path(r"C:\Users\jymv1575\Desktop\Excel Fallos")
+# --- ÚNICA carpeta de resultados ---
+CARPETA_RESULTADOS_DAVINCI = Path(r"C:\Users\jymv1575\Desktop\Resultados Davinci")
+CARPETA_RESULTADOS_DAVINCI.mkdir(parents=True, exist_ok=True)
+
+# Alias internos → todo apunta a la misma carpeta
+CARPETA_EXCEL_CLON = CARPETA_RESULTADOS_DAVINCI              # "Clonación Json"
+CARPETA_EXCEL_REESTRUCTURADO = CARPETA_RESULTADOS_DAVINCI    # "Reestructurado"
+CARPETA_EXCEL_NORMALIZADO = CARPETA_RESULTADOS_DAVINCI       # "Resultado Normalizado"
+CARPETA_EXCEL_FALLOS = CARPETA_RESULTADOS_DAVINCI            # (si se usa)
+CARPETA_SALIDA_COMPARACION = CARPETA_RESULTADOS_DAVINCI      # "Avista Evidencia"
+CARPETA_EXCEL_UNIFICADO = CARPETA_RESULTADOS_DAVINCI         # "Davinci_Resultado" final
 
 # --- Bases Avista (dinámico = toma el último .xlsx de la carpeta) ---
 CARPETA_BASES_AVISTA = Path(r"C:\Users\jymv1575\Desktop\Base de Datos Avista")
-CARPETA_SALIDA_COMPARACION = Path(r"C:\Users\jymv1575\Desktop\Resultado de la comparacion positivo")
 
-# --- Evidencia por documento (9 columnas en la hoja única) ---
+# --- Evidencia por documento (9 columnas) ---
 DOCUMENTOS = [
     "CEDULA COMPARADA",
     "DESPRENDIBLE",
@@ -47,7 +52,7 @@ DOCUMENTOS_MAPEO = {
     "CEDULA COMPARADA": {
         "NOMBRE COMPLETO": {"re": "Cedula Nombre Completo", "tipo": "texto"},
         "CEDULA":          {"re": "Cedula",                 "tipo": "numero"},
-        "CEDULA 2":        {"re": "Cedula Cedula",          "tipo": "numero"},
+        "CEDULA":          {"re": "cedula_numero_documento","tipo": "numero"},
         "FECHA NACIMIENTO":{"re": "cedula_fecha_nacimiento","tipo": "fecha"},
     },
     "DATACREDITO": {
@@ -68,7 +73,7 @@ DOCUMENTOS_MAPEO = {
         "CEDULA":          {"re": "Desprendible Nomina Cedula",          "tipo": "numero"},
         "EMISOR":          {"re": "desprendible_nomina_pagaduria",       "tipo": "texto"},
         "SALARIO":         {"re": "desprendible_nomina_salario",         "tipo": "numero"},
-        # Regla especial 3 meses: solo mes/año
+        # Especial: vigencia debe estar entre (desembolso-3m, desembolso), comparando por mes/año
         "FECHA DESEMBOLSO": {
             "re": "desprendible_nomina_vigencia",
             "tipo": "fecha",
@@ -109,6 +114,5 @@ DOCUMENTOS_MAPEO = {
     "AMORTIZACION": {
         "NOMBRE COMPLETO":   {"re": "Amortizacion Nombre Completo",                   "tipo": "texto"},
         "NOMBRE COMPLETO 2": {"re": "Amortizacion Firma Electrónica Nombre Completo", "tipo": "texto"},
-        # agrega aquí demás campos si los necesitas
     },
 }
