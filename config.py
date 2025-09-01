@@ -59,15 +59,22 @@ DOCUMENTOS_MAPEO = {
         "NOMBRE COMPLETO": {"re": "Datacredito Nombre Completo", "tipo": "texto"},
     },
     "SEGURO DE VIDA": {
-        "NOMBRE COMPLETO":   {"re": "Seguro De Vida Nombre Completo",                   "tipo": "texto"},
-        "NOMBRE COMPLETO 2": {"re": "Seguro De Vida Firma Electrónica Nombre Completo", "tipo": "texto"},
-        "CEDULA":            {"re": "Seguro De Vida Cedula",                            "tipo": "numero"},
+        "NOMBRE COMPLETO": [
+            {"re": "Seguro De Vida Nombre Completo", "tipo": "texto"},
+            {"re": "Seguro De Vida Firma Electrónica Nombre Completo", "tipo": "texto"}
+        ],
+        "CEDULA": [
+            {"re": "seguro_de_vida_cedula_firma_electronica", "tipo": "numero"}
+        ]
     },
     "FIANZA": {
-        "NOMBRE COMPLETO":   {"re": "Solicitud Fianza Nombre Completo",                   "tipo": "texto"},
-        "NOMBRE COMPLETO 2": {"re": "Solicitud Fianza Firma Electrónica Nombre Completo", "tipo": "texto"},
-        "CEDULA":            {"re": "Solicitud Fianza Cedula",                            "tipo": "numero"},
+        "NOMBRE COMPLETO": [
+            {"re": "Solicitud Fianza Nombre Completo", "tipo": "texto"},
+            {"re": "Solicitud Fianza Firma Electrónica Nombre Completo", "tipo": "texto"},
+        ],
+        "CEDULA": {"re": "solicitud_fianza_cedula_firma_electronica", "tipo": "numero"},
     },
+
     "DESPRENDIBLE": {
         "NOMBRE COMPLETO": {"re": "Desprendible Nomina Nombre Completo", "tipo": "texto"},
         "CEDULA":          {"re": "Desprendible Nomina Cedula",          "tipo": "numero"},

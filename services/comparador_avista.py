@@ -121,6 +121,23 @@ def _avista_val(row: pd.Series, campo_avista: str) -> str:
         return str(row.get("FECHA NACIMIENTO", "") or "")
     return str(row.get(ca, "") or "")
 
+# --- Nombre por componentes → un solo OK (Datacrédito / Fianza) ---
+def _ok_fullname_components(fav_row: pd.Series, re_fullname: str) -> list[str]:
+    re_full = _norm_text(re_fullname)
+    av_p1 = _norm_text(fav_row.get("PRIMER NOMBRE", ""))
+    av_p2 = _norm_text(fav_row.get("SEGUNDO NOMBRE", ""))
+    av_a1 = _norm_text(fav_row.get("PRIMER APELLIDO", ""))
+    av_a2 = _norm_text(fav_row.get("SEGUNDO APELLIDO", ""))
+
+    comps = [("PRIMER NOMBRE", av_p1), ("SEGUNDO NOMBRE", av_p2),
+             ("PRIMER APELLIDO", av_a1), ("SEGUNDO APELLIDO", av_a2)]
+    evaluados = [(lbl, piece) for (lbl, piece) in comps if piece]
+    if not evaluados:
+        return ["ND-AV NOMBRE COMPLETO"]
+
+    fallos = [lbl for (lbl, piece) in evaluados if piece not in re_full]
+    return ["OK"] if not fallos else [f"FALLO {lbl}" for lbl in fallos]
+
 # -------------------- Comparador --------------------
 class ComparadorAvista:
     def __init__(self, carpeta_excel_reestructurado: str, carpeta_bases_avista: str | Path, carpeta_salida: str | Path):
@@ -227,75 +244,64 @@ class ComparadorAvista:
                 evidencias = []
 
                 for campo_avista, spec in campos.items():
-                    # RE vs RE
-                    if spec.get("comparar_recontra_re"):
-                        re1 = spec.get("re"); re2 = spec.get("re2")
-                        tipo = spec.get("tipo", "texto")
-                        a = fila_res.get(re1, "")
-                        b = fila_res.get(re2, "")
-                        if _is_blank(a) and _is_blank(b):
-                            evidencias.append(f"ND-RE {re1},{re2}")
-                        elif _is_blank(a):
-                            evidencias.append(f"ND-RE {re1}")
-                        elif _is_blank(b):
-                            evidencias.append(f"ND-RE {re2}")
-                        else:
-                            evidencias.append("OK" if _cmp(a, b, tipo) else f"FALLO {re1} vs {re2}")
-                        continue
+                    # ---- NUEVO: soportar lista de specs o un dict ----
+                    specs = spec if isinstance(spec, list) else [spec]
 
-                    # Avista vs RE
-                    re_col = spec.get("re")
-                    tipo = spec.get("tipo", "texto")
-                    special = spec.get("validacion_especial")
-
+                    # Valor de AVISTA (se calcula una vez)
                     av_val = _avista_val(fav, campo_avista)
+
+                    # Si AVISTA no trae valor, marca ND-AV para cada spec y sigue
                     if _is_blank(av_val):
-                        evidencias.append(f"ND-AV {campo_avista}")
+                        for _ in specs:
+                            evidencias.append(f"ND-AV {campo_avista}")
                         continue
 
-                    if not re_col or re_col not in fila_res.index:
-                        evidencias.append(f"ND-RE {campo_avista}")
-                        continue
-
-                    re_val = fila_res.get(re_col, "")
-                    if _is_blank(re_val):
-                        evidencias.append(f"ND-RE {campo_avista}")
-                        continue
-
-                    # --------- DATACREDITO: un solo OK si todo coincide ----------
-                    if doc.strip().upper() == "DATACREDITO" and _norm_header(campo_avista) == "NOMBRE COMPLETO":
-                        av_p1 = _norm_text(fav.get("PRIMER NOMBRE", ""))
-                        av_p2 = _norm_text(fav.get("SEGUNDO NOMBRE", ""))
-                        av_a1 = _norm_text(fav.get("PRIMER APELLIDO", ""))
-                        av_a2 = _norm_text(fav.get("SEGUNDO APELLIDO", ""))
-                        re_full = _norm_text(re_val)
-
-                        componentes = [
-                            ("PRIMER NOMBRE", av_p1),
-                            ("SEGUNDO NOMBRE", av_p2),
-                            ("PRIMER APELLIDO", av_a1),
-                            ("SEGUNDO APELLIDO", av_a2),
-                        ]
-                        evaluados = [(lbl, piece) for (lbl, piece) in componentes if piece]
-                        if not evaluados:
-                            evidencias.append("ND-AV NOMBRE COMPLETO")
+                    # Recorremos cada spec individual
+                    for sp in specs:
+                        # RE vs RE
+                        if sp.get("comparar_recontra_re"):
+                            re1 = sp.get("re"); re2 = sp.get("re2")
+                            tipo = sp.get("tipo", "texto")
+                            a = fila_res.get(re1, "")
+                            b = fila_res.get(re2, "")
+                            if _is_blank(a) and _is_blank(b):
+                                evidencias.append(f"ND-RE {re1},{re2}")
+                            elif _is_blank(a):
+                                evidencias.append(f"ND-RE {re1}")
+                            elif _is_blank(b):
+                                evidencias.append(f"ND-RE {re2}")
+                            else:
+                                evidencias.append("OK" if _cmp(a, b, tipo) else f"FALLO {re1} vs {re2}")
                             continue
 
-                        fallos = [lbl for (lbl, piece) in evaluados if piece not in re_full]
-                        if not fallos:
-                            evidencias.append("OK")
-                        else:
-                            evidencias.extend([f"FALLO {lbl}" for lbl in fallos])
-                        continue
-                    # ------------------------------------------------------------
+                        # Avista vs RE
+                        re_col = sp.get("re")
+                        tipo = sp.get("tipo", "texto")
+                        special = sp.get("validacion_especial")
 
-                    if special == "max_3_meses_antes_mes_anio":
-                        ok = _max_3_meses_antes_mes_anio(av_val, re_val)
-                        evidencias.append("OK" if ok else ("ND-RE "+campo_avista if ok is None else "FALLO FECHA (3M)"))
-                        continue
+                        if not re_col or re_col not in fila_res.index:
+                            evidencias.append(f"ND-RE {campo_avista}")
+                            continue
 
-                    ok = _cmp(av_val, re_val, tipo)
-                    evidencias.append("OK" if ok else f"FALLO {campo_avista}")
+                        re_val = fila_res.get(re_col, "")
+                        if _is_blank(re_val):
+                            evidencias.append(f"ND-RE {campo_avista}")
+                            continue
+
+                        # Mantener la lógica existente: nombre completo (Datacrédito/Fianza) → un solo OK
+                        if _norm_header(doc) in {"DATACREDITO", "FIANZA"} and _norm_header(campo_avista) in {
+                            "NOMBRE COMPLETO", "NOMBRE COMPLETO 2"
+                        }:
+                            evidencias.extend(_ok_fullname_components(fav, re_val))
+                            continue
+
+                        if special == "max_3_meses_antes_mes_anio":
+                            ok = _max_3_meses_antes_mes_anio(av_val, re_val)
+                            evidencias.append("OK" if ok else ("ND-RE "+campo_avista if ok is None else "FALLO FECHA (3M)"))
+                            continue
+
+                        ok = _cmp(av_val, re_val, tipo)
+                        evidencias.append("OK" if ok else f"FALLO {campo_avista}")
 
                 hoja.at[idx, doc] = ", ".join(evidencias) if evidencias else ""
 
