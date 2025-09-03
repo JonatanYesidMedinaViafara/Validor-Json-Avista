@@ -88,8 +88,8 @@ DOCUMENTOS_MAPEO = {
         },
     },
     "FORMATO CONOCIMIENTO": {
-        "NOMBRE COMPLETO":   {"re": "Formato Conocimiento Nombre Completo",                   "tipo": "texto"},
-        "NOMBRE COMPLETO 2": {"re": "Formato Conocimiento Firma Electrónica Nombre Completo", "tipo": "texto"},
+        "NOMBRE COMPLETO":   {"re": "Formato Conocimiento Firma Electrónica Nombre Completo", "tipo": "texto"},
+        #"NOMBRE COMPLETO 2": {"re": "Formato Conocimiento Firma Electrónica Nombre Completo", "tipo": "texto"},
         "CEDULA":            {"re": "formato_conocimiento_cedula_firma_electronica",          "tipo": "numero"},
         "PLAZO INICIAL":     {"re": "formato_conocimiento_plazo_meses",                        "tipo": "numero"},
         "MONTO INICIAL":     {"re": "formato_conocimiento_valor_total_credito",                "tipo": "numero"},

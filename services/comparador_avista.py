@@ -1,4 +1,3 @@
-# services/comparador_avista.py
 import pandas as pd
 from pathlib import Path
 import logging
@@ -111,6 +110,11 @@ def _avista_nombre_completo(row: pd.Series) -> str:
     partes = [p for p in [p1, p2, a1, a2] if p]
     return " ".join(partes)
 
+# Alias de columnas AVISTA para tolerar typos/variantes
+_AVISTA_ALIASES = {
+    "MONTO INICIAL": "MONTO INCIAL",  # si la base trae el typo 'INCIAL'
+}
+
 def _avista_val(row: pd.Series, campo_avista: str) -> str:
     ca = _norm_header(campo_avista)
     if ca == "NOMBRE COMPLETO":
@@ -119,9 +123,13 @@ def _avista_val(row: pd.Series, campo_avista: str) -> str:
         return str(row.get("CEDULA", "") or "")
     if ca == "FECHA NACIMIENTO":
         return str(row.get("FECHA NACIMIENTO", "") or "")
-    return str(row.get(ca, "") or "")
+    # Lookup directo y con alias (por si viene con typo en AVISTA)
+    val = row.get(ca, "")
+    if (val is None or str(val).strip() == "") and ca in _AVISTA_ALIASES:
+        val = row.get(_AVISTA_ALIASES[ca], "")
+    return str(val or "")
 
-# --- Nombre por componentes → un solo OK (Datacrédito / Fianza) ---
+# --- Nombre por componentes → un solo OK (Datacrédito / Fianza / Formato Conocimiento) ---
 def _ok_fullname_components(fav_row: pd.Series, re_fullname: str) -> list[str]:
     re_full = _norm_text(re_fullname)
     av_p1 = _norm_text(fav_row.get("PRIMER NOMBRE", ""))
@@ -244,19 +252,18 @@ class ComparadorAvista:
                 evidencias = []
 
                 for campo_avista, spec in campos.items():
-                    # ---- NUEVO: soportar lista de specs o un dict ----
+                    # ---- Soportar lista de specs o un dict ----
                     specs = spec if isinstance(spec, list) else [spec]
 
-                    # Valor de AVISTA (se calcula una vez)
+                    # Valor Avista (una sola vez)
                     av_val = _avista_val(fav, campo_avista)
 
-                    # Si AVISTA no trae valor, marca ND-AV para cada spec y sigue
+                    # Si AVISTA no trae valor, marca ND-AV para cada spec
                     if _is_blank(av_val):
                         for _ in specs:
                             evidencias.append(f"ND-AV {campo_avista}")
                         continue
 
-                    # Recorremos cada spec individual
                     for sp in specs:
                         # RE vs RE
                         if sp.get("comparar_recontra_re"):
@@ -288,8 +295,8 @@ class ComparadorAvista:
                             evidencias.append(f"ND-RE {campo_avista}")
                             continue
 
-                        # Mantener la lógica existente: nombre completo (Datacrédito/Fianza) → un solo OK
-                        if _norm_header(doc) in {"DATACREDITO", "FIANZA"} and _norm_header(campo_avista) in {
+                        # Un solo OK para nombres (DATACREDITO / FIANZA / FORMATO CONOCIMIENTO)
+                        if _norm_header(doc) in {"DATACREDITO", "FIANZA", "FORMATO CONOCIMIENTO"} and _norm_header(campo_avista) in {
                             "NOMBRE COMPLETO", "NOMBRE COMPLETO 2"
                         }:
                             evidencias.extend(_ok_fullname_components(fav, re_val))
