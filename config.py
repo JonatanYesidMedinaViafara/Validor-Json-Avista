@@ -45,12 +45,12 @@ DOCUMENTOS = [
 ]
 
 # Tolerancia (texto) para SequenceMatcher
-TOLERANCIA_TEXTO = 0.000000001
+TOLERANCIA_TEXTO = 0.00000000001
 
 # Muestra los valores usados en la comparación de TASA (debug)
 MOSTRAR_DETALLE_TASA = True   # ponlo en False para ocultarlo
 # Tolerancia para comparar tasas nominales (en fracción). 0.001 = 0.1 pp
-TASA_TOLERANCIA = 0.0000000001
+TASA_TOLERANCIA = 0.00000000001
 # ---- Mapeos (resumido a nombre completo donde aplique) ----
 DOCUMENTOS_MAPEO = {
     "CEDULA COMPARADA": {
