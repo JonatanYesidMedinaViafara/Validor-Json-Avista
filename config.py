@@ -45,8 +45,12 @@ DOCUMENTOS = [
 ]
 
 # Tolerancia (texto) para SequenceMatcher
-TOLERANCIA_TEXTO = 0.70
+TOLERANCIA_TEXTO = 0.000000001
 
+# Muestra los valores usados en la comparación de TASA (debug)
+MOSTRAR_DETALLE_TASA = True   # ponlo en False para ocultarlo
+# Tolerancia para comparar tasas nominales (en fracción). 0.001 = 0.1 pp
+TASA_TOLERANCIA = 0.0000000001
 # ---- Mapeos (resumido a nombre completo donde aplique) ----
 DOCUMENTOS_MAPEO = {
     "CEDULA COMPARADA": {
@@ -76,10 +80,10 @@ DOCUMENTOS_MAPEO = {
     },
 
     "DESPRENDIBLE": {
-        "NOMBRE COMPLETO": {"re": "Desprendible Nomina Nombre Completo", "tipo": "texto"},
-        "CEDULA":          {"re": "Desprendible Nomina Cedula",          "tipo": "numero"},
-        "EMISOR":          {"re": "desprendible_nomina_pagaduria",       "tipo": "texto"},
-        "SALARIO":         {"re": "desprendible_nomina_salario",         "tipo": "numero"},
+        "NOMBRE COMPLETO": {"re": "Desprendible Nomina Nombre Completo",  "tipo": "texto"},
+        "CEDULA":          {"re": "desprendible_nomina_numero_documento", "tipo": "numero"},
+        "EMISOR":          {"re": "desprendible_nomina_pagaduria",        "tipo": "texto"},
+        "SALARIO":         {"re": "desprendible_nomina_salario",          "tipo": "numero"},
         # Especial: vigencia debe estar entre (desembolso-3m, desembolso), comparando por mes/año
         "FECHA DESEMBOLSO": {
             "re": "desprendible_nomina_vigencia",
@@ -95,22 +99,40 @@ DOCUMENTOS_MAPEO = {
         "MONTO INICIAL":     {"re": "formato_conocimiento_valor_total_credito",                "tipo": "numero"},
     },
     "LIBRANZA": {
-        "NOMBRE COMPLETO":   {"re": "Libranza Nombre Completo",                   "tipo": "texto"},
-        "NOMBRE COMPLETO 2": {"re": "Libranza Firma Electrónica Nombre Completo", "tipo": "texto"},
-        "CEDULA":            {"re": "Libranza Cedula",                            "tipo": "numero"},
-        "CEDULA 2":          {"re": "libranza_cedula_firma_electronica",          "tipo": "numero"},
+        "NOMBRE COMPLETO": [
+            {"re": "Libranza Nombre Completo",                   "tipo": "texto"},
+            {"re": "Libranza Firma Electrónica Nombre Completo", "tipo": "texto"},
+        ],
+        "CEDULA": [
+            {"re": "libranza_numero_documento",         "tipo": "numero"},
+            {"re": "libranza_cedula_firma_electronica", "tipo": "numero"},  
+        ],
         "OPERACIÓN":         {"re": "libranza_numero_credito",                    "tipo": "numero"},
         "EMISOR":            {"re": "libranza_pagaduria",                         "tipo": "texto"},
         "PLAZO INICIAL":     {"re": "libranza_plazo",                             "tipo": "numero"},
-        "CUOTA CORRIENTE":   {"re": "libranza_valor_cuota",                       "tipo": "numero"},
+        "VALOR CUOTA":       {"re": "libranza_valor_cuota",                       "tipo": "numero"},
         "MONTO INICIAL":     {"re": "libranza_valor_prestamo",                    "tipo": "numero"},
     },
     "SOLICITUD DE CREDITO": {
-        "NOMBRE COMPLETO":   {"re": "Solicitud Credito Nombre Completo",                   "tipo": "texto"},
-        "NOMBRE COMPLETO 2": {"re": "Solicitud Credito Firma Electrónica Nombre Completo", "tipo": "texto"},
-        "OPERACIÓN":         {"re": "Numero credito",                           "tipo": "numero"},
-        "CEDULA":            {"re": "Solicitud Credito Cedula",                 "tipo": "numero"},
-        "OPERACIÓN 2":       {"re": "solicitud_credito_numero_credito",         "tipo": "numero"},
+        # Nombre completo -> dos fuentes, un solo "OK" en evidencia
+        "NOMBRE COMPLETO": [
+            {"re": "Solicitud Credito Nombre Completo",                   "tipo": "texto"},
+            {"re": "Solicitud Credito Firma Electrónica Nombre Completo", "tipo": "texto"},
+        ],
+
+        # Cédula se repite (dos columnas del reestructurado)
+        "CEDULA": [
+            {"re": "seguro_de_vida_numero_documento",                 "tipo": "numero"},
+            {"re": "solicitud_credito_cedula_firma_electronica","tipo": "numero"},
+        ],
+
+        # Operación se repite (dos columnas del reestructurado)
+        "OPERACIÓN": [
+            {"re": "Numero credito",                   "tipo": "numero"},
+            {"re": "solicitud_credito_numero_credito", "tipo": "numero"},
+        ],
+
+        # Comparación RE vs RE dentro del mismo reestructurado
         "RE_vs_RE__SOLICITUD": {
             "re":  "solicitud_credito_solicitud",
             "re2": "amortizacion_numero_solicitud",
@@ -118,8 +140,41 @@ DOCUMENTOS_MAPEO = {
             "comparar_recontra_re": True
         },
     },
-    "AMORTIZACION": {
-        "NOMBRE COMPLETO":   {"re": "Amortizacion Nombre Completo",                   "tipo": "texto"},
-        "NOMBRE COMPLETO 2": {"re": "Amortizacion Firma Electrónica Nombre Completo", "tipo": "texto"},
+# --- AMORTIZACIÓN ---
+"AMORTIZACION": {
+    # Nombres: Agrupados bajo una misma clave, permite que CUALQUIERA de los patrones
+    #          haga match con el campo "NOMBRE COMPLETO".
+    "NOMBRE COMPLETO": [
+        {"re": "Amortizacion Nombre Completo", "tipo": "texto"},
+        {"re": "Amortizacion Firma Electrónica Nombre Completo", "tipo": "texto"},
+    ],
+
+    # Cédula: Similar a Nombre, se definen dos patrones posibles para el mismo campo.
+    "CEDULA": [
+        {"re": "amortizacion_numero_documento", "tipo": "numero"},
+        {"re": "amortizacion_cedula_firma_electronica", "tipo": "numero"},
+    ],
+
+    # RE vs RE: Comparación especial entre dos campos extraídos por la IA.
+    # El nombre de la clave es descriptivo para entender la comparación.
+    "RE_vs_RE__AMORT_SOLICITUD": {
+        "re": "amortizacion_numero_solicitud",
+        "re2": "solicitud_credito_solicitud",
+        "tipo": "numero",
+        "comparar_recontra_re": True  # Flag especial para tu lógica
     },
+
+    # Demás campos directos con un solo patrón de extracción.
+    # Para consistencia, también podrían ir dentro de una lista de un solo elemento.
+    "EMISOR": {"re": "amortizacion_pagaduria", "tipo": "texto"},
+    "PLAZO INICIAL": {"re": "amortizacion_plazo_meses", "tipo": "numero"},
+    # Tasa: Campo que requiere una transformación o cálculo antes de la comparación.
+    "TASA NOMINAL": {
+        "re": "amortizacion_tasa_interes",
+        "tipo": "tasa_nominal",
+       # "validacion_especial": "tasa_nominal_desde_amort"  # Flag para tu lógica
+    },
+    "MONTO INICIAL": {"re": "amortizacion_valor_credito", "tipo": "numero"},
+    "VALOR CUOTA": {"re": "amortizacion_valor_cuota", "tipo": "numero"},
+},
 }

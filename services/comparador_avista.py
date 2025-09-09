@@ -1,3 +1,4 @@
+# services/comparador_avista.py
 import pandas as pd
 from pathlib import Path
 import logging
@@ -43,6 +44,64 @@ def _norm_num_like(v):
 
 _MESES = {"ENE":"01","FEB":"02","MAR":"03","ABR":"04","MAY":"05","JUN":"06",
           "JUL":"07","AGO":"08","SEP":"09","OCT":"10","NOV":"11","DIC":"12"}
+
+def _parse_percent(x):
+    """Devuelve la tasa en fracción (0.12 = 12%) o None si no se puede parsear."""
+    if x is None:
+        return None
+    s = str(x).strip().upper().replace("%", "")
+    s = s.replace(",", ".")
+    s_num = re.sub(r"[^0-9.\-]", "", s)
+    try:
+        v = float(s_num)
+    except Exception:
+        return None
+    return v/100.0 if v > 1 else v
+
+# --------- NUEVO: conversión a tasa MENSUAL (para AMORTIZACIÓN) ----------
+def _to_mensual_from_amort(re_val):
+    """
+    Convierte 'amortizacion_tasa_interes' a tasa mensual (fracción), siguiendo tu Excel:
+    REDONDEAR((1 + (x/100))^(1/12) - 1; 4) cuando x es EA anual.
+    Heurística:
+      - Contiene 'EA'/'E.A' -> EA anual -> mensual = (1+EA)^(1/12)-1
+      - Contiene 'ANUAL'/'NOM' -> Nominal anual -> mensual = NA/12
+      - Contiene 'MES'/'MV' -> ya mensual
+      - Sin pistas:
+          * si el número es "grande" (>= 0.05 en fracción o >= 5% cuando viene como 25.97), se asume EA anual
+          * si es pequeño (< 0.05), se considera ya mensual
+    """
+    if _is_blank(re_val):
+        return None
+    raw = str(re_val).upper()
+    p = _parse_percent(raw)
+    if p is None:
+        return None
+
+    if "EA" in raw or "E.A" in raw:
+        # efectiva anual -> mensual efectiva
+        return (1.0 + p)**(1.0/12.0) - 1.0
+    if "MES" in raw or "MV" in raw:
+        # ya está mensual (nominal mensual ≈ efectiva mensual para nuestros fines)
+        return p
+    if "ANUAL" in raw or "NOM" in raw:
+        # nominal anual -> mensual nominal
+        return p / 12.0
+
+    # Sin palabras clave: si es un porcentaje alto (ej. 25.97%), interpretamos EA anual
+    if p >= 0.05:  # >= 5% anual en fracción => claramente anual
+        return (1.0 + p)**(1.0/12.0) - 1.0
+
+    # Si ya es pequeño (~1-2%), trátalo como mensual
+    return p
+# -------------------------------------------------------------------------
+
+def _almost_equal(a, b, tol=0.001):
+    """Compara números con tolerancia absoluta (0.001 = 0.1 pp)."""
+    try:
+        return abs(float(a) - float(b)) <= float(tol)
+    except Exception:
+        return False
 
 def _norm_fecha(v):
     """Devuelve fecha como DD/MM/YYYY cuando es reconocible."""
@@ -110,9 +169,8 @@ def _avista_nombre_completo(row: pd.Series) -> str:
     partes = [p for p in [p1, p2, a1, a2] if p]
     return " ".join(partes)
 
-# Alias de columnas AVISTA para tolerar typos/variantes
 _AVISTA_ALIASES = {
-    "MONTO INICIAL": "MONTO INCIAL",  # si la base trae el typo 'INCIAL'
+    "MONTO INICIAL": "MONTO INCIAL",
 }
 
 def _avista_val(row: pd.Series, campo_avista: str) -> str:
@@ -123,26 +181,22 @@ def _avista_val(row: pd.Series, campo_avista: str) -> str:
         return str(row.get("CEDULA", "") or "")
     if ca == "FECHA NACIMIENTO":
         return str(row.get("FECHA NACIMIENTO", "") or "")
-    # Lookup directo y con alias (por si viene con typo en AVISTA)
     val = row.get(ca, "")
     if (val is None or str(val).strip() == "") and ca in _AVISTA_ALIASES:
         val = row.get(_AVISTA_ALIASES[ca], "")
     return str(val or "")
 
-# --- Nombre por componentes → un solo OK (Datacrédito / Fianza / Formato Conocimiento) ---
 def _ok_fullname_components(fav_row: pd.Series, re_fullname: str) -> list[str]:
     re_full = _norm_text(re_fullname)
     av_p1 = _norm_text(fav_row.get("PRIMER NOMBRE", ""))
     av_p2 = _norm_text(fav_row.get("SEGUNDO NOMBRE", ""))
     av_a1 = _norm_text(fav_row.get("PRIMER APELLIDO", ""))
     av_a2 = _norm_text(fav_row.get("SEGUNDO APELLIDO", ""))
-
     comps = [("PRIMER NOMBRE", av_p1), ("SEGUNDO NOMBRE", av_p2),
              ("PRIMER APELLIDO", av_a1), ("SEGUNDO APELLIDO", av_a2)]
     evaluados = [(lbl, piece) for (lbl, piece) in comps if piece]
     if not evaluados:
         return ["ND-AV NOMBRE COMPLETO"]
-
     fallos = [lbl for (lbl, piece) in evaluados if piece not in re_full]
     return ["OK"] if not fallos else [f"FALLO {lbl}" for lbl in fallos]
 
@@ -252,36 +306,38 @@ class ComparadorAvista:
                 evidencias = []
 
                 for campo_avista, spec in campos.items():
-                    # ---- Soportar lista de specs o un dict ----
                     specs = spec if isinstance(spec, list) else [spec]
 
-                    # Valor Avista (una sola vez)
-                    av_val = _avista_val(fav, campo_avista)
+                    # 1) RE vs RE (sin AVISTA)
+                    for sp in [x for x in specs if x.get("comparar_recontra_re")]:
+                        re1 = sp.get("re"); re2 = sp.get("re2")
+                        tipo = sp.get("tipo", "texto")
+                        a = fila_res.get(re1, "")
+                        b = fila_res.get(re2, "")
+                        if _is_blank(a) and _is_blank(b):
+                            evidencias.append(f"ND-RE {re1},{re2}")
+                        elif _is_blank(a):
+                            evidencias.append(f"ND-RE {re1}")
+                        elif _is_blank(b):
+                            evidencias.append(f"ND-RE {re2}")
+                        else:
+                            evidencias.append("OK" if _cmp(a, b, tipo) else f"FALLO {re1} vs {re2}")
 
-                    # Si AVISTA no trae valor, marca ND-AV para cada spec
-                    if _is_blank(av_val):
-                        for _ in specs:
-                            evidencias.append(f"ND-AV {campo_avista}")
+                    # 2) AVISTA vs RE
+                    normal_specs = [x for x in specs if not x.get("comparar_recontra_re")]
+                    if not normal_specs:
+                        if evidencias:
+                            hoja.at[idx, doc] = ", ".join(evidencias)
                         continue
 
-                    for sp in specs:
-                        # RE vs RE
-                        if sp.get("comparar_recontra_re"):
-                            re1 = sp.get("re"); re2 = sp.get("re2")
-                            tipo = sp.get("tipo", "texto")
-                            a = fila_res.get(re1, "")
-                            b = fila_res.get(re2, "")
-                            if _is_blank(a) and _is_blank(b):
-                                evidencias.append(f"ND-RE {re1},{re2}")
-                            elif _is_blank(a):
-                                evidencias.append(f"ND-RE {re1}")
-                            elif _is_blank(b):
-                                evidencias.append(f"ND-RE {re2}")
-                            else:
-                                evidencias.append("OK" if _cmp(a, b, tipo) else f"FALLO {re1} vs {re2}")
-                            continue
+                    av_val = _avista_val(fav, campo_avista)
+                    if _is_blank(av_val):
+                        for _ in normal_specs:
+                            evidencias.append(f"ND-AV {campo_avista}")
+                        hoja.at[idx, doc] = ", ".join(evidencias)
+                        continue
 
-                        # Avista vs RE
+                    for sp in normal_specs:
                         re_col = sp.get("re")
                         tipo = sp.get("tipo", "texto")
                         special = sp.get("validacion_especial")
@@ -295,20 +351,40 @@ class ComparadorAvista:
                             evidencias.append(f"ND-RE {campo_avista}")
                             continue
 
-                        # Un solo OK para nombres (DATACREDITO / FIANZA / FORMATO CONOCIMIENTO)
-                        if _norm_header(doc) in {"DATACREDITO", "FIANZA", "FORMATO CONOCIMIENTO"} and _norm_header(campo_avista) in {
-                            "NOMBRE COMPLETO", "NOMBRE COMPLETO 2"
-                        }:
+                        # Nombres → un solo OK
+                        if _norm_header(doc) in {"DATACREDITO", "FIANZA", "FORMATO CONOCIMIENTO", "LIBRANZA", "AMORTIZACION"} and \
+                           _norm_header(campo_avista) in {"NOMBRE COMPLETO", "NOMBRE COMPLETO 2"}:
                             evidencias.extend(_ok_fullname_components(fav, re_val))
                             continue
 
-                        if special == "max_3_meses_antes_mes_anio":
-                            ok = _max_3_meses_antes_mes_anio(av_val, re_val)
-                            evidencias.append("OK" if ok else ("ND-RE "+campo_avista if ok is None else "FALLO FECHA (3M)"))
-                            continue
+                        # ---- ESPECIAL: TASA NOMINAL (comparación en tasa MENSUAL) ----
+                        if tipo == "tasa_nominal" or special in {"tasa_interes_nominal", "amort_tasa_nominal"}:
+                            # AVISTA (base Excel) -> fracción mensual (1.94% -> 0.0194)
+                            av_pct_m = _parse_percent(av_val)
+                            # Reestructurado -> convertir a mensual con tu lógica/Excel
+                            re_pct_m = _to_mensual_from_amort(re_val)
 
-                        ok = _cmp(av_val, re_val, tipo)
-                        evidencias.append("OK" if ok else f"FALLO {campo_avista}")
+                            if av_pct_m is None and re_pct_m is None:
+                                msg = "ND-AV TASA NOMINAL y ND-RE TASA NOMINAL"
+                            elif av_pct_m is None:
+                                msg = "ND-AV TASA NOMINAL"
+                            elif re_pct_m is None:
+                                msg = "ND-RE TASA NOMINAL"
+                            else:
+                                tol = getattr(config, "TASA_TOLERANCIA", 0.001)
+                                ok = _almost_equal(av_pct_m, re_pct_m, tol)
+                                msg = "OK" if ok else "FALLO TASA NOMINAL"
+
+                            if getattr(config, "MOSTRAR_DETALLE_TASA", False):
+                                av_txt = f"{av_pct_m:.6f}" if av_pct_m is not None else "NA"
+                                re_txt = f"{re_pct_m:.6f}" if re_pct_m is not None else "NA"
+                                msg += f" (AV='{av_val}'→{av_txt}; RE='{re_val}'→{re_txt})"
+
+                            evidencias.append(msg)
+                            continue
+                        # ----------------------------------------------------------------
+
+                        evidencias.append("OK" if _cmp(av_val, re_val, tipo) else f"FALLO {campo_avista}")
 
                 hoja.at[idx, doc] = ", ".join(evidencias) if evidencias else ""
 
