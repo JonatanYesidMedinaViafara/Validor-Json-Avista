@@ -2,18 +2,54 @@
 import logging
 from utils.logger import get_logger
 import config
+from pathlib import Path
 
-# IMPORTS de servicios
-from services.depurar import Depurador                     # <- el archivo es depurar.py
+# Servicios
+from services.depurar import Depurador
 from services.clonador_excel import ClonadorExcel
 from services.reestructurador_excel import ReestructuradorExcel
 from services.comparador_avista import ComparadorAvista
 from services.normalizador_excel import NormalizadorExcel
 from services.consolidador_final import ConsolidadorFinal
 
+def _ask_path(prompt_txt: str, default_path: Path) -> str:
+    """
+    Permite al usuario cambiar una ruta. Enter = usa default.
+    Devuelve siempre un string (la ruta elegida o la default).
+    """
+    print(f"\n{prompt_txt}\n[Enter para usar el valor por defecto]\nActual: {default_path}")
+    r = input("Nueva ruta (opcional): ").strip('" ').strip()
+    if not r:
+        return str(default_path)
+    p = Path(r)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return str(p)
+
 if __name__ == "__main__":
     logger = get_logger()
     logger.info("Iniciando sistema...")
+
+    # 0) Permitir cambiar rutas (opcional)
+    try:
+        cambiar = input("¿Deseas cambiar rutas por defecto? [s/N]: ").strip().lower()
+    except Exception:
+        cambiar = "n"
+
+    if cambiar == "s":
+        config.RUTA_JSONS = _ask_path("Ruta de entrada de JSON:", Path(config.RUTA_JSONS))
+        config.RUTA_NO_JSON = _ask_path("Ruta auxiliar (no JSON):", Path(config.RUTA_NO_JSON))
+        config.CARPETA_RESULTADOS_DAVINCI = Path(_ask_path("Carpeta de resultados Davinci:", config.CARPETA_RESULTADOS_DAVINCI))
+        # Alias internos recalculados al vuelo
+        config.CARPETA_EXCEL_CLON = config.CARPETA_RESULTADOS_DAVINCI
+        config.CARPETA_EXCEL_REESTRUCTURADO = config.CARPETA_RESULTADOS_DAVINCI
+        config.CARPETA_EXCEL_NORMALIZADO = config.CARPETA_RESULTADOS_DAVINCI
+        config.CARPETA_SALIDA_COMPARACION = config.CARPETA_RESULTADOS_DAVINCI
+        config.CARPETA_EXCEL_UNIFICADO = config.CARPETA_RESULTADOS_DAVINCI
+        # Base Avista opcional
+        config.CARPETA_BASES_AVISTA = Path(_ask_path("Carpeta Base de Datos Avista:", config.CARPETA_BASES_AVISTA))
 
     # 1) ¿Desde dónde tomamos JSON?
     try:
@@ -22,24 +58,39 @@ if __name__ == "__main__":
     except Exception:
         modo = config.MODO_INGESTA_DEFAULT
 
-    # 2) Depuración (solo local): mueve lo que NO es .json a RUTA_NO_JSON
+    # 2) Depuración NO debe detener el pipeline
     if modo == 1:
-        dep = Depurador(config.RUTA_JSONS, config.RUTA_NO_JSON)
-        dep.ejecutar()
+        # Modo local: los conflictos van a Escritorio/archivos conflicto (lo resuelve Depurador)
+        dep = Depurador(
+            carpeta_fuente=config.RUTA_JSONS,
+            carpeta_conflicto_destino=None,
+            modo_ingesta=1,
+            logger=logger,
+        )
+    else:
+        # Modo SFTP: mueve a <Resultados Davinci>/archivos conflicto
+        dep = Depurador(
+            carpeta_fuente=config.RUTA_JSONS,
+            carpeta_conflicto_destino=config.CARPETA_RESULTADOS_DAVINCI / "archivos conflicto",
+            modo_ingesta=2,
+            logger=logger,
+        )
 
-    # 3) Clonación (lee local o SFTP) → guarda en Resultados Davinci
+    # Nota: ejecutar() SIEMPRE retorna True para no cortar el pipeline.
+    dep.ejecutar()
+
+    # 3) Clonación
     clon = ClonadorExcel(
         carpeta_json_local=config.RUTA_JSONS,
         carpeta_salida=str(config.CARPETA_EXCEL_CLON),
         modo_ingesta=modo
     )
-    if clon.generar_excel():
-        logger.info("Clonación completada correctamente.")
-    else:
+    if not clon.generar_excel():
         logger.error("Fallo en clonación.")
         raise SystemExit(1)
+    logger.info("Clonación completada correctamente.")
 
-    # 4) Reestructurado → guarda en Resultados Davinci
+    # 4) Reestructurado
     reestr = ReestructuradorExcel(
         carpeta_excel_origen=str(config.CARPETA_EXCEL_CLON),
         carpeta_excel_destino=str(config.CARPETA_EXCEL_REESTRUCTURADO),
@@ -50,15 +101,15 @@ if __name__ == "__main__":
 
     logger.info("Continuando con el proceso de validación...")
 
-    # 5) Comparación AVISTA (toma SIEMPRE el último Excel de Avista)
+    # 5) Comparación AVISTA
     comp = ComparadorAvista(
         carpeta_excel_reestructurado=str(config.CARPETA_EXCEL_REESTRUCTURADO),
         carpeta_bases_avista=str(config.CARPETA_BASES_AVISTA),
         carpeta_salida=str(config.CARPETA_SALIDA_COMPARACION),
     )
-    comp.comparar()   # genera SOLO '..._evidencia_avista_unica.xlsx' en Resultados Davinci
+    comp.comparar()
 
-    # 6) Normalización (un único archivo con columna 'Estado Normalizado')
+    # 6) Normalización
     normalizador = NormalizadorExcel(
         carpeta_excel_reestructurado=str(config.CARPETA_EXCEL_REESTRUCTURADO),
         carpeta_salida=str(config.CARPETA_EXCEL_NORMALIZADO),
@@ -66,7 +117,7 @@ if __name__ == "__main__":
     )
     normalizador.normalizar()
 
-    # 7) Unificado final (un solo Excel con hojas: Clonación Json, Reestructurado, Resultado Normalizado, Avista Evidencia)
+    # 7) Unificado final
     consol = ConsolidadorFinal(
         carpeta_clon=str(config.CARPETA_EXCEL_CLON),
         carpeta_reestructurado=str(config.CARPETA_EXCEL_REESTRUCTURADO),

@@ -1,0 +1,10 @@
+{
+  "theme": "darkly",
+  "modo": "Carpeta Local (1)",
+  "MOSTRAR_DETALLE_TASA": true,
+  "TASA_TOLERANCIA": 1e-11,
+  "RUTA_JSONS": "C:\\Users\\jymv1575\\Desktop\\Archivos Json a Validar",
+  "RUTA_NO_JSON": "C:\\Users\\jymv1575\\Desktop\\Archivos no Json",
+  "CARPETA_RESULTADOS_DAVINCI": "C:\\Users\\jymv1575\\Desktop\\Resultados Davinci",
+  "CARPETA_BASES_AVISTA": "C:\\Users\\jymv1575\\Desktop\\Base de Datos Avista"
+}
